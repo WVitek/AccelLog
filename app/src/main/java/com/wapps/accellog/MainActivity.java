@@ -55,7 +55,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        stopService(new Intent(this, AccelLogService.class));
+        //stopService(new Intent(this, AccelLogService.class));
         super.onDestroy();
     }
 
