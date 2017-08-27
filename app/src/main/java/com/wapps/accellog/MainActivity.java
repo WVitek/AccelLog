@@ -1,44 +1,35 @@
 package com.wapps.accellog;
 
-import android.content.Context;
-import android.hardware.Sensor;
-import android.hardware.SensorEvent;
-import android.hardware.SensorEventListener;
-import android.hardware.SensorManager;
+import android.content.Intent;
 import android.os.Bundle;
-import android.os.SystemClock;
-import android.support.design.widget.FloatingActionButton;
-import android.support.design.widget.Snackbar;
+import android.os.Handler;
+import android.os.Message;
+import android.os.Messenger;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
-import android.view.View;
 import android.view.Menu;
 import android.view.MenuItem;
-import android.widget.EditText;
 import android.widget.TextView;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.OutputStreamWriter;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.Locale;
+import java.lang.ref.WeakReference;
 
-public class MainActivity extends AppCompatActivity implements SensorEventListener {
+public class MainActivity extends AppCompatActivity {
 
-    private SensorManager sensorManager;
+    public static final String MESSENGER_INTENT_KEY
+            = BuildConfig.APPLICATION_ID + ".MESSENGER_INTENT_KEY";
+    public static final int MSG_PER_SEC_STR = 0;
+
+    private TextView mTextView;
+    // Handler for incoming messages from the service.
+    private IncomingMessageHandler mHandler;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        //Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-        //setSupportActionBar(toolbar);
-
-        sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
-        sensorManager.registerListener(this, sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), SensorManager.SENSOR_DELAY_FASTEST);
+        Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+        mTextView = (TextView)findViewById(R.id.textView);
 /*
         FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
         fab.setOnClickListener(new View.OnClickListener() {
@@ -49,7 +40,23 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             }
         });
 */
-        prepCurrFile();
+        mHandler = new IncomingMessageHandler(this);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // Start service and provide it a way to communicate with this class.
+        Intent startServiceIntent = new Intent(this, AccelLogService.class);
+        Messenger messengerIncoming = new Messenger(mHandler);
+        startServiceIntent.putExtra(MESSENGER_INTENT_KEY, messengerIncoming);
+        startService(startServiceIntent);
+    }
+
+    @Override
+    protected void onDestroy() {
+        stopService(new Intent(this, AccelLogService.class));
+        super.onDestroy();
     }
 
     @Override
@@ -74,101 +81,34 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         return super.onOptionsItemSelected(item);
     }
 
-    private long startMillis = System.currentTimeMillis() - SystemClock.elapsedRealtimeNanos()/1000000;
-    private long nMeasuresTotal = 0;
-    private long prevSec = 0;
-    double sumAx = 0, sumAy = 0, sumAz = 0;
-    int nMeasures = 0;
+    /**
+     * A {@link Handler} allows you to send messages associated with a thread. A {@link Messenger}
+     * uses this handler to communicate from {@link AccelLogService}. It's also used to make
+     * the start and stop views blink for a short period of time.
+     */
+    private static class IncomingMessageHandler extends Handler {
 
-    private StringBuilder sb = new StringBuilder(16500);
+        // Prevent possible leaks with a weak reference.
+        private WeakReference<MainActivity> mActivity;
 
-    @Override
-    public void onAccuracyChanged(Sensor sensor, int accuracy) {
-    }
-
-    @Override
-    public void onSensorChanged(SensorEvent event) {
-        if (event.sensor.getType() != Sensor.TYPE_ACCELEROMETER)
-            return;
-        double ax, ay, az;
-        ax = event.values[0];
-        ay = event.values[1];
-        az = event.values[2];
-        long millis = startMillis + SystemClock.elapsedRealtimeNanos()/1000000;
-        //long millis = System.currentTimeMillis();
-        long sec = millis / 1000;
-        if (prevSec != sec) {
-            // update view
-            double k = 1.0d / nMeasures;
-            String text = String.format(Locale.US,
-                    "***** Accelerometer data Logger\n\ntotal measures=%d\nper second=%d\n\navg Ax=%.3f\navg Ay=%.3f\navg Az=%.3f\n\n%s",
-                    nMeasuresTotal, nMeasures, sumAx * k, sumAy * k, sumAz * k, fileStatus
-            );
-            ((TextView) findViewById(R.id.textView)).setText(text);
-            prevSec = sec;
-            nMeasuresTotal += nMeasures;
-            nMeasures = 0;
-            sumAx = sumAy = sumAz = 0;
-            //getApplication().getExternalFilesDir(null);
-            if(sb.length()>16384)
-                saveBufToFile();
+        IncomingMessageHandler(MainActivity activity) {
+            super(/* default looper */);
+            this.mActivity = new WeakReference<>(activity);
         }
-        sumAx += ax;
-        sumAy += ay;
-        sumAz += az;
-        nMeasures++;
-        sb.append(String.format("%d\t%.3f\t%.3f\t%.3f\n",millis,ax,ay,az));
-    }
 
-    File currFile;
-
-    void prepCurrFile(){
-        Calendar cal = Calendar.getInstance();
-        String fileName = String.format(Locale.US, "%04d%02d%02dT%02d%02d%02d.acclog.tsv",
-                cal.get(Calendar.YEAR),
-                cal.get(Calendar.MONTH)+1,
-                cal.get(Calendar.DAY_OF_MONTH),
-                cal.get(Calendar.HOUR_OF_DAY),
-                cal.get(Calendar.MINUTE),
-                cal.get(Calendar.SECOND)
-        );
-        currFile = new File(getExternalFilesDir(null).getPath(), fileName);
-        sb.append("timestamp,ms\taX\taY\taZ\n");
-    }
-
-    @Override
-    protected void onSaveInstanceState(Bundle outState) {
-        super.onSaveInstanceState(outState);
-        saveBufToFile();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        saveBufToFile();
-    }
-
-    String fileStatus = "...";
-
-    void saveBufToFile() {
-        if(sb.length()==0)
-            return;
-        long length = 0;
-        try {
-            FileOutputStream outputStream = new FileOutputStream(currFile.getPath(), true);
-            OutputStreamWriter osw = new OutputStreamWriter(outputStream);
-            osw.append(sb);
-            sb.setLength(0);
-            osw.flush();
-            length = outputStream.getChannel().size();
-            osw.close();
-            outputStream.close();
-            fileStatus = String.format(Locale.US, "file size=%d\nfile path=%s", length, currFile.getPath());
-            if(length>=4096*1024)
-                prepCurrFile();
-        } catch (IOException e) {
-            fileStatus = e.getMessage();
+        @Override
+        public void handleMessage(Message msg) {
+            MainActivity mainActivity = mActivity.get();
+            if (mainActivity == null) {
+                // Activity is no longer available, exit.
+                return;
+            }
+            switch (msg.what) {
+                case MSG_PER_SEC_STR:
+                    String text = (String)msg.obj;
+                    mainActivity.mTextView.setText(text);
+                    break;
+            }
         }
-    }
-
+}
 }
